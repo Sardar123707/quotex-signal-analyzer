@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#101827">
+<link rel="manifest" href="manifest.webmanifest">
+<title>1-Minute Signal Analyzer</title>
+<style>
+:root{color-scheme:dark;--bg:#0b1220;--panel:#131e30;--muted:#9aabc2;--line:#26364e;--green:#22c58b;--red:#ff647c;--blue:#71a7ff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:#edf4ff;font:15px system-ui,Arial,sans-serif}
+main{max-width:760px;margin:auto;padding:18px 14px 36px}
+h1{font-size:22px;margin:4px 0}.sub{color:var(--muted);font-size:13px;margin:4px 0 16px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:15px;margin:12px 0}
+label{display:block;color:var(--muted);font-size:12px;margin:10px 0 6px}
+input,select,button{width:100%;padding:12px;border-radius:10px;border:1px solid var(--line);background:#0d1727;color:#fff;font:inherit}
+button{background:#2868d7;border:0;font-weight:700;margin-top:10px}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}.stat{background:#0d1727;border-radius:12px;padding:12px}
+.small{font-size:12px;color:var(--muted)}.big{font-size:20px;font-weight:750;margin-top:4px}
+#signal{font-size:25px;font-weight:850;letter-spacing:.4px} .buy{color:var(--green)}.sell{color:var(--red)}.wait{color:#f4c66a}
+canvas{width:100%;height:220px;display:block;background:#0d1727;border-radius:12px}
+.note{font-size:12px;line-height:1.5;color:var(--muted)}
+.pill{display:inline-block;border:1px solid var(--line);border-radius:99px;padding:4px 9px;font-size:11px;color:var(--muted)}
+a{color:#9dc2ff}
+</style>
+</head>
+<body>
+<main>
+  <h1>1-Minute Signal Analyzer</h1>
+  <div class="sub">Forex data • EMA 9/21 • RSI 14 • Analysis only (no auto-trading)</div>
+
+  <section class="panel">
+    <label for="key">Twelve Data API key</label>
+    <input id="key" type="password" autocomplete="off" placeholder="Paste your free API key">
+    <div class="note">Key stays in this page's memory only; it is not saved. Get a key at <a href="https://twelvedata.com/" target="_blank" rel="noopener">Twelve Data</a>.</div>
+    <div class="row">
+      <div><label for="pair">Forex pair</label>
+        <select id="pair">
+          <option>EUR/USD</option><option>GBP/USD</option><option>USD/JPY</option>
+          <option>AUD/USD</option><option>USD/CHF</option>
+        </select>
+      </div>
+      <div><label>Market type</label><input value="Normal Forex only" disabled></div>
+    </div>
+    <button id="connect">Connect / Refresh data</button>
+    <div class="small" id="status" style="margin-top:10px">Not connected. Add your API key to start.</div>
+  </section>
+
+  <section class="panel">
+    <div class="row">
+      <div class="stat"><div class="small">Latest price</div><div class="big" id="price">—</div></div>
+      <div class="stat"><div class="small">Last provider update</div><div class="big" id="updated" style="font-size:14px">—</div></div>
+      <div class="stat"><div class="small">EMA 9 / EMA 21</div><div class="big" id="emas" style="font-size:15px">—</div></div>
+      <div class="stat"><div class="small">RSI (14)</div><div class="big" id="rsi">—</div></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="small">Latest 1-minute candles (provider history)</div>
+    <canvas id="chart" width="700" height="220"></canvas>
+    <div style="display:flex;justify-content:space-between;margin-top:10px">
+      <span class="pill">Signal: closed-candle analysis</span>
+      <span class="pill" id="countdown">Next refresh: —</span>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="small">Analyzer output</div>
+    <div id="signal" class="wait">WAIT</div>
+    <div id="reason" class="note">Connect to market data to calculate a signal.</div>
+    <div class="note" style="margin-top:10px">Signal strength is a rule score, not a probability of winning. Test on a demo account; no signal guarantees a result.</div>
+  </section>
+
+  <section class="panel">
+    <b>Important limitations</b>
+    <ul class="note">
+      <li>Free plan is rate-limited. This starter app refreshes only the selected pair every 2 minutes to stay near the stated 800-request daily allowance.</li>
+      <li>It uses the provider's 1-minute candle history; refresh timing is not a tick-by-tick live stream.</li>
+      <li>OTC prices are not included. Quotex OTC may differ from normal Forex feeds.</li>
+      <li>Do not enter your Quotex password. This app does not place trades.</li>
+    </ul>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let apiKey = "", timer = null, nextAt = 0, candles = [];
+const REFRESH_MS = 120000; // 2 minutes: free-plan request budget
+const pair = () => $("pair").value;
+
+function ema(values, period){
+  if(values.length < period) return null;
+  const k = 2/(period+1);
+  let v = values.slice(0,period).reduce((a,b)=>a+b,0)/period;
+  for(let i=period;i<values.length;i++) v = values[i]*k + v*(1-k);
+  return v;
+}
+function rsi(values, period=14){
+  if(values.length <= period) return null;
+  let gains=0, losses=0;
+  for(let i=1;i<=period;i++){let d=values[i]-values[i-1]; if(d>=0)gains+=d;else losses-=d;}
+  let avgG=gains/period, avgL=losses/period;
+  for(let i=period+1;i<values.length;i++){
+    let d=values[i]-values[i-1];
+    avgG=(avgG*(period-1)+Math.max(d,0))/period;
+    avgL=(avgL*(period-1)+Math.max(-d,0))/period;
+  }
+  if(avgL===0) return 100;
+  return 100-(100/(1+avgG/avgL));
+}
+function drawChart(data){
+  const c=$("chart"),ctx=c.getContext("2d"),w=c.width,h=c.height;
+  ctx.clearRect(0,0,w,h); if(!data.length)return;
+  const min=Math.min(...data.map(x=>x.low)), max=Math.max(...data.map(x=>x.high));
+  const pad=18, range=(max-min)||1, step=(w-2*pad)/data.length;
+  ctx.strokeStyle="#26364e";ctx.lineWidth=1;
+  for(let i=0;i<4;i++){let y=pad+i*(h-2*pad)/3;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke();}
+  data.forEach((d,i)=>{
+    const x=pad+i*step+step/2, y=v=>h-pad-(v-min)/range*(h-2*pad);
+    const up=d.close>=d.open;ctx.strokeStyle=up?"#22c58b":"#ff647c";ctx.fillStyle=ctx.strokeStyle;
+    ctx.beginPath();ctx.moveTo(x,y(d.high));ctx.lineTo(x,y(d.low));ctx.stroke();
+    let top=y(Math.max(d.open,d.close)), bottom=y(Math.min(d.open,d.close));
+    ctx.fillRect(x-step*.28,top,Math.max(2,step*.56),Math.max(2,bottom-top));
+  });
+}
+function analyze(data){
+  const closes=data.map(x=>x.close);
+  const e9=ema(closes,9),e21=ema(closes,21),rv=rsi(closes,14);
+  $("emas").textContent=e9&&e21?`${e9.toFixed(5)} / ${e21.toFixed(5)}`:"Need more candles";
+  $("rsi").textContent=rv===null?"—":rv.toFixed(1);
+  const last=data[data.length-1], prev=data[data.length-2];
+  let score=0, reasons=[];
+  if(e9!==null&&e21!==null){if(e9>e21){score++;reasons.push("EMA 9 above EMA 21");}else if(e9<e21){score--;reasons.push("EMA 9 below EMA 21");}}
+  if(rv!==null){if(rv>=50&&rv<=68){score++;reasons.push("RSI supports upward momentum");}else if(rv<50&&rv>=32){score--;reasons.push("RSI supports downward momentum");}else reasons.push("RSI near an extreme; caution");}
+  if(last.close>last.open){score++;reasons.push("Latest candle bullish");}else if(last.close<last.open){score--;reasons.push("Latest candle bearish");}
+  if(prev && last.close>prev.close){} // retained for later filters
+  const el=$("signal");el.className="";
+  if(score>=2){el.textContent="BUY (CALL)";el.classList.add("buy");}
+  else if(score<=-2){el.textContent="SELL (PUT)";el.classList.add("sell");}
+  else{el.textContent="WAIT";el.classList.add("wait");}
+  $("reason").textContent=`Rule score: ${score}/3. ${reasons.join(" • ")}`;
+}
+async function loadData(){
+  if(!apiKey){$("status").textContent="Please enter your Twelve Data API key.";return;}
+  $("status").textContent=`Loading ${pair()} 1-minute candles…`;
+  try{
+    const url=`https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(pair())}&interval=1min&outputsize=60&apikey=${encodeURIComponent(apiKey)}`;
+    const res=await fetch(url); const json=await res.json();
+    if(!res.ok || json.status==="error" || !json.values) throw new Error(json.message||"Data request failed");
+    candles=json.values.slice().reverse().map(v=>({datetime:v.datetime,open:+v.open,high:+v.high,low:+v.low,close:+v.close}));
+    if(candles.length<22) throw new Error("Not enough candles returned to calculate EMA 21.");
+    const last=candles[candles.length-1];
+    $("price").textContent=last.close.toFixed(5);
+    $("updated").textContent=last.datetime;
+    drawChart(candles.slice(-35)); analyze(candles);
+    $("status").textContent=`Connected to Twelve Data • ${pair()} • ${candles.length} candles loaded`;
+    nextAt=Date.now()+REFRESH_MS;
+  }catch(e){$("status").textContent="Connection/data error: "+e.message;}
+}
+function start(){
+  apiKey=$("key").value.trim();
+  if(!apiKey){$("status").textContent="Paste your Twelve Data API key first.";return;}
+  if(timer)clearInterval(timer);
+  loadData();
+  timer=setInterval(loadData,REFRESH_MS);
+}
+$("connect").addEventListener("click",start);
+$("pair").addEventListener("change",()=>{if(apiKey)loadData();});
+setInterval(()=>{
+  if(nextAt){let s=Math.max(0,Math.ceil((nextAt-Date.now())/1000));$("countdown").textContent=`Next refresh: ${s}s`;}
+},1000);
+if("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+  window.addEventListener("load",()=>navigator.serviceWorker.register("./sw.js").catch(()=>{}));
+}
+</script>
+</body>
+</html>
