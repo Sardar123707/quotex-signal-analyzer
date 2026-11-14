@@ -143,7 +143,7 @@ async function loadData(){
   if(!apiKey){$("status").textContent="Please enter your Twelve Data API key.";return;}
   $("status").textContent=`Loading ${pair()} 1-minute candles…`;
   try{
-    const url=`https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(pair())}&interval=1min&outputsize=60&apikey=${encodeURIComponent(apiKey)}`;
+    const url=`https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(pair())}&interval=1min&outputsize=60&timezone=Asia/Karachi&apikey=${encodeURIComponent(apiKey)}`;
     const res=await fetch(url); const json=await res.json();
     if(!res.ok || json.status==="error" || !json.values) throw new Error(json.message||"Data request failed");
     candles=json.values.slice().reverse().map(v=>({datetime:v.datetime,open:+v.open,high:+v.high,low:+v.low,close:+v.close}));
